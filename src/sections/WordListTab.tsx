@@ -56,8 +56,8 @@ export function WordListTab() {
 
   return (
     <div className="flex flex-col py-4">
-      {/* Sticky search bar */}
-      <div className="sticky top-14 z-20 -mx-4 bg-background/95 px-4 pb-2 pt-1 backdrop-blur">
+      {/* Sticky search bar (56px app header + this block's fixed 84px height) */}
+      <div className="sticky top-14 z-30 -mx-4 bg-background px-4 pb-2 pt-1">
         <div className="relative">
           <Search
             size={18}
@@ -72,15 +72,16 @@ export function WordListTab() {
             className="card-shadow h-12 w-full rounded-2xl border bg-card pl-11 pr-4 text-base outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/25"
           />
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="mt-2 h-4 text-xs leading-4 text-muted-foreground">
           {filtered.length === 0 ? 'Ничего не найдено' : `Найдено слов: ${filtered.length}`}
         </p>
       </div>
 
-      {/* A–Z jump rail */}
+      {/* A–Z jump rail: opaque, aligned to the content column edge (not the viewport edge) */}
       <nav
         aria-label="Быстрый переход по алфавиту"
-        className="card-shadow fixed right-1 top-1/2 z-30 flex max-h-[70vh] -translate-y-1/2 flex-col items-center overflow-hidden rounded-full border bg-card/85 py-1.5 backdrop-blur"
+        className="card-shadow fixed top-1/2 z-30 flex max-h-[70vh] -translate-y-1/2 flex-col items-center overflow-hidden rounded-full border bg-card py-1.5"
+        style={{ right: 'max(0.25rem, calc(50vw - 14rem))' }}
       >
         {PRESENT_LETTERS.map((l) => (
           <button
@@ -110,7 +111,7 @@ export function WordListTab() {
             <div key={letter}>
               <div
                 id={`letter-${letter}`}
-                className="sticky top-[7.75rem] z-10 scroll-mt-32 border-b bg-secondary/95 px-4 py-1.5 text-sm font-bold text-secondary-foreground backdrop-blur"
+                className="sticky top-[8.75rem] z-20 scroll-mt-36 border-b bg-secondary px-4 py-1.5 text-sm font-bold text-secondary-foreground"
               >
                 {letter}
               </div>
@@ -121,7 +122,7 @@ export function WordListTab() {
                     <li
                       key={w.w}
                       className={cn(
-                        'flex items-center gap-1 px-2 py-1.5 transition-opacity',
+                        'flex items-center gap-1 py-1.5 pl-2 pr-9 transition-opacity',
                         isKnown && 'opacity-55',
                       )}
                     >

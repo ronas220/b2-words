@@ -229,28 +229,32 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
   const allLearned = onlyUnlearned && baseDeck.length > 0 && deck.length === 0;
 
   return (
-    <div className="flex flex-col gap-4 py-4">
-      {/* Stats header */}
-      <section className="card-shadow rounded-2xl border bg-card p-4">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-semibold">
+    <div
+      className="flex flex-col gap-2 py-2"
+      style={{ height: 'calc(100dvh - 8.5rem - env(safe-area-inset-bottom))' }}
+    >
+      {/* Stats header — compact single row */}
+      <section className="card-shadow rounded-2xl border bg-card p-2">
+        <div className="flex items-center gap-2.5">
+          <p className="shrink-0 whitespace-nowrap text-xs font-semibold">
             Выучено: {knownCount} / {WORDS.length}
           </p>
+          <Progress value={(knownCount / WORDS.length) * 100} className="h-2 flex-1" />
           <button
             type="button"
             onClick={onReset}
-            className="flex h-11 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-muted-foreground transition-all hover:bg-muted active:scale-95 active:bg-muted/70"
+            aria-label="Сбросить прогресс"
+            title="Сбросить прогресс"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all hover:bg-muted active:scale-95 active:bg-muted/70"
           >
-            <RotateCcw size={14} />
-            Сбросить прогресс
+            <RotateCcw size={16} />
           </button>
         </div>
-        <Progress value={(knownCount / WORDS.length) * 100} className="mt-2 h-2" />
       </section>
 
       {/* Controls */}
-      <section className="flex flex-col gap-2.5">
-        <div className="chip-rail -mx-4 overflow-x-auto px-4 pb-1">
+      <section className="flex flex-col gap-2">
+        <div className="chip-rail -mx-4 overflow-x-auto px-4">
           <div className="flex w-max gap-1.5">
             <Chip active={letter === 'ALL'} onClick={() => pickLetter('ALL')}>
               Все
@@ -281,20 +285,23 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
 
       {current ? (
         <>
-          {/* Deck progress */}
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-baseline justify-between text-sm text-muted-foreground">
-              <span>
-                Карточка {clamped + 1} из {deck.length}
-              </span>
-              <span>выучено в колоде: {deckKnown}</span>
-            </div>
-            <Progress value={((clamped + 1) / deck.length) * 100} className="h-1.5" />
+          {/* Deck progress — single compact line */}
+          <div className="flex items-center gap-2.5">
+            <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+              {clamped + 1} из {deck.length}
+            </span>
+            <Progress value={((clamped + 1) / deck.length) * 100} className="h-1.5 flex-1" />
+            <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+              выучено: {deckKnown}
+            </span>
           </div>
 
-          {/* Swipe + flip card */}
+          {/* Swipe + flip card — takes all remaining height */}
           <div
-            className={cn('swipe-wrap relative select-none', !dragging && 'snapping')}
+            className={cn(
+              'swipe-wrap relative min-h-[220px] flex-1 select-none',
+              !dragging && 'snapping',
+            )}
             style={{ transform: `translateX(${effectiveX}px) rotate(${rotation}deg)` }}
             role="button"
             tabIndex={0}
@@ -311,10 +318,10 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
               }
             }}
           >
-            <div className="flip-scene">
-              <div className={cn('flip-inner', flipped && 'flipped')}>
+            <div className="flip-scene h-full">
+              <div className={cn('flip-inner h-full', flipped && 'flipped')}>
                 {/* Front */}
-                <div className="flip-face card-shadow relative flex min-h-[340px] flex-col items-center justify-center gap-3 overflow-hidden rounded-3xl border border-primary/10 bg-gradient-to-br from-card via-card to-indigo-100/70 p-6 dark:to-indigo-950/40">
+                <div className="flip-face card-shadow relative flex h-full flex-col items-center justify-center gap-2 overflow-hidden rounded-3xl border border-primary/10 bg-gradient-to-br from-card via-card to-indigo-100/70 p-4 dark:to-indigo-950/40">
                   <SpeakerButton
                     text={current.w}
                     size={22}
@@ -324,27 +331,31 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
                   <span className="rounded-full bg-secondary px-3.5 py-1 text-xs font-semibold text-secondary-foreground">
                     {current.pos}
                   </span>
-                  <p className="font-display text-center text-5xl font-extrabold tracking-tight">
+                  <p className="font-display text-center text-[clamp(1.9rem,9vw,3rem)] font-extrabold leading-tight tracking-tight">
                     {current.w}
                   </p>
-                  <p className="mt-6 text-xs text-muted-foreground">
+                  <p className="mt-2 text-xs text-muted-foreground [@media(max-height:740px)]:hidden">
                     Тап — перевернуть · свайп — ответить
                   </p>
                 </div>
                 {/* Back */}
-                <div className="flip-face flip-back card-shadow relative flex min-h-[340px] flex-col items-center justify-center gap-4 overflow-hidden rounded-3xl border border-violet-300/40 bg-gradient-to-br from-card via-card to-violet-200/60 p-6 dark:border-violet-500/25 dark:to-violet-950/40">
+                <div className="flip-face flip-back card-shadow relative flex h-full flex-col items-center justify-center gap-2 overflow-hidden rounded-3xl border border-violet-300/40 bg-gradient-to-br from-card via-card to-violet-200/60 p-4 dark:border-violet-500/25 dark:to-violet-950/40">
                   <SpeakerButton
                     text={current.ph}
                     size={22}
                     label="Озвучить пример"
                     className="absolute right-3.5 top-3.5 bg-primary/10"
                   />
-                  <p className="font-display text-center text-2xl font-bold leading-snug text-primary">
+                  <p className="font-display text-center text-[clamp(1.15rem,5.5vw,1.5rem)] font-bold leading-snug text-primary">
                     {current.ru}
                   </p>
-                  <div className="flex w-full flex-col items-center gap-2 rounded-2xl bg-muted/70 p-4 dark:bg-muted/40">
-                    <p className="text-center text-base font-medium leading-snug">{current.ph}</p>
-                    <p className="text-center text-sm text-muted-foreground">{current.phr}</p>
+                  <div className="flex w-full flex-col items-center gap-1.5 rounded-2xl bg-muted/70 p-3 dark:bg-muted/40">
+                    <p className="text-center text-sm font-medium leading-snug sm:text-base">
+                      {current.ph}
+                    </p>
+                    <p className="text-center text-xs text-muted-foreground sm:text-sm">
+                      {current.phr}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -386,7 +397,7 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
           </div>
         </>
       ) : (
-        <div className="card-shadow flex min-h-[340px] flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-8 text-center">
+        <div className="card-shadow flex min-h-[220px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
           {allLearned ? (
             <>
               <span className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">
