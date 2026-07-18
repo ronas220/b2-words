@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Search, SearchX } from 'lucide-react';
 import { WORDS } from '@/data/words';
 import type { WordEntry } from '@/data/words';
@@ -10,17 +10,22 @@ import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 200;
 
-/** Letters actually present in the dataset, for the A–Z jump rail. */
-const PRESENT_LETTERS = [...new Set(WORDS.map((w) => w.w[0].toUpperCase()))].sort();
+const ALL_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+/** Letters that have at least one word in the dataset (X and Y do not). */
+const PRESENT_LETTERS = new Set(WORDS.map((w) => w.w[0].toUpperCase()));
 
 export function WordListTab() {
   const { known, setWordKnown } = useAppState();
   const reducedMotion = useReducedMotion();
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(PAGE_SIZE);
+  /** Letter we must scroll to once its group is rendered (after limit expansion). */
+  const [pendingJump, setPendingJump] = useState<string | null>(null);
 
   useEffect(() => {
     setLimit(PAGE_SIZE);
+    setPendingJump(null);
   }, [query]);
 
   const filtered = useMemo(() => {
@@ -47,12 +52,80 @@ export function WordListTab() {
     return [...map.entries()];
   }, [visible]);
 
+  /** Letters that have matches under the current filter (search-aware). */
+  const availableLetters = useMemo(() => {
+    const set = new Set<string>();
+    for (const w of filtered) set.add(w.w[0].toUpperCase());
+    return set;
+  }, [filtered]);
+
+  const doScroll = useCallback(
+    (letter: string) => {
+      const header = document.getElementById(`letter-${letter}`);
+      if (!header) return;
+      hapticTick();
+      // Scroll by the non-sticky group wrapper's document position instead of
+      // scrollIntoView on the sticky header: on UPWARD jumps the header is
+      // clamped at the bottom of its group, and scrollIntoView then lands at
+      // the END of the group instead of its start.
+      const anchor = header.parentElement ?? header;
+      const top = anchor.getBoundingClientRect().top + window.scrollY - 140; // 8.75rem sticky offset
+      window.scrollTo({ top: Math.max(top, 0), behavior: reducedMotion ? 'auto' : 'smooth' });
+    },
+    [reducedMotion],
+  );
+
   const jumpTo = (letter: string) => {
-    hapticTick();
-    document
-      .getElementById(`letter-${letter}`)
-      ?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+    // Resolve to the nearest letter that actually has matches (search mode
+    // may leave the exact letter empty); prefer the next one forward.
+    let target = letter;
+    if (!availableLetters.has(target)) {
+      const from = ALL_LETTERS.indexOf(target);
+      let found: string | null = null;
+      for (let d = 1; d < ALL_LETTERS.length; d++) {
+        const fwd = ALL_LETTERS[from + d];
+        const bwd = ALL_LETTERS[from - d];
+        if (fwd !== undefined && availableLetters.has(fwd)) {
+          found = fwd;
+          break;
+        }
+        if (bwd !== undefined && availableLetters.has(bwd)) {
+          found = bwd;
+          break;
+        }
+      }
+      if (!found) return; // nothing to jump to — no-op cleanly
+      target = found;
+    }
+    const firstIdx = filtered.findIndex((w) => w.w[0].toUpperCase() === target);
+    if (firstIdx === -1) return;
+    // Expand through the END of the target group (not just its first row) so
+    // there is enough content below the header to scroll it up to the top.
+    let lastIdx = firstIdx;
+    for (let i = filtered.length - 1; i > firstIdx; i--) {
+      if (filtered[i].w[0].toUpperCase() === target) {
+        lastIdx = i;
+        break;
+      }
+    }
+    const need = lastIdx + 1;
+    if (need > limit) {
+      // Group not rendered yet: expand the slice, scroll after React commits.
+      setPendingJump(target);
+      setLimit(need);
+    } else {
+      doScroll(target);
+    }
   };
+
+  // Complete a pending jump once the target group exists in the DOM.
+  useEffect(() => {
+    if (!pendingJump) return;
+    if (document.getElementById(`letter-${pendingJump}`)) {
+      doScroll(pendingJump);
+      setPendingJump(null);
+    }
+  }, [visible, pendingJump, doScroll]);
 
   return (
     <div className="flex flex-col py-4">
@@ -83,17 +156,26 @@ export function WordListTab() {
         className="card-shadow fixed top-1/2 z-30 flex max-h-[70vh] -translate-y-1/2 flex-col items-center overflow-hidden rounded-full border bg-card py-1.5"
         style={{ right: 'max(0.25rem, calc(50vw - 14rem))' }}
       >
-        {PRESENT_LETTERS.map((l) => (
-          <button
-            key={l}
-            type="button"
-            onClick={() => jumpTo(l)}
-            aria-label={`К букве ${l}`}
-            className="flex h-[17px] w-7 items-center justify-center rounded-full text-[10px] font-bold text-primary transition-colors hover:bg-primary/15 active:bg-primary/25"
-          >
-            {l}
-          </button>
-        ))}
+        {ALL_LETTERS.map((l) => {
+          const present = PRESENT_LETTERS.has(l);
+          return (
+            <button
+              key={l}
+              type="button"
+              disabled={!present}
+              onClick={() => jumpTo(l)}
+              aria-label={present ? `К букве ${l}` : `Буква ${l} — нет слов`}
+              className={cn(
+                'flex h-[17px] w-7 items-center justify-center rounded-full text-[10px] font-bold transition-colors',
+                present
+                  ? 'text-primary hover:bg-primary/15 active:bg-primary/25'
+                  : 'cursor-default text-muted-foreground/30',
+              )}
+            >
+              {l}
+            </button>
+          );
+        })}
       </nav>
 
       {/* Grouped list */}
@@ -184,6 +266,9 @@ export function WordListTab() {
           Показать ещё ({Math.min(PAGE_SIZE, filtered.length - limit)} из {filtered.length - limit})
         </button>
       )}
+
+      {/* Runway: lets even the last letter header scroll up to the sticky offset */}
+      <div aria-hidden="true" style={{ height: 'calc(100dvh - 16rem)' }} />
     </div>
   );
 }
