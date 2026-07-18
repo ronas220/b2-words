@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { AnimationEvent as ReactAnimationEvent } from 'react';
 import { GraduationCap, Moon, Sun } from 'lucide-react';
 import { AppStateProvider, useAppState } from '@/state/app-state';
 import { BottomNav } from '@/components/BottomNav';
@@ -26,6 +27,13 @@ function ThemeToggle() {
 export default function App() {
   const [tab, setTab] = useState<TabId>('cards');
 
+  // Remove tab-enter once the entrance animation finishes: its held
+  // `transform: translateY(0)` would otherwise keep creating a containing
+  // block that breaks position:fixed descendants (the A–Z rail, overlays).
+  const clearEnter = (e: ReactAnimationEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) e.currentTarget.classList.remove('tab-enter');
+  };
+
   return (
     <AppStateProvider>
       <div className="min-h-dvh bg-background text-foreground">
@@ -47,13 +55,13 @@ export default function App() {
           style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom))' }}
         >
           {/* All tabs stay mounted so deck position / quiz round survive tab switches */}
-          <div className={cn(tab !== 'cards' && 'hidden', tab === 'cards' && 'tab-enter')}>
+          <div className={cn(tab !== 'cards' && 'hidden', tab === 'cards' && 'tab-enter')} onAnimationEnd={clearEnter}>
             <FlashcardsTab active={tab === 'cards'} />
           </div>
-          <div className={cn(tab !== 'list' && 'hidden', tab === 'list' && 'tab-enter')}>
+          <div className={cn(tab !== 'list' && 'hidden', tab === 'list' && 'tab-enter')} onAnimationEnd={clearEnter}>
             <WordListTab />
           </div>
-          <div className={cn(tab !== 'quiz' && 'hidden', tab === 'quiz' && 'tab-enter')}>
+          <div className={cn(tab !== 'quiz' && 'hidden', tab === 'quiz' && 'tab-enter')} onAnimationEnd={clearEnter}>
             <QuizTab />
           </div>
         </main>

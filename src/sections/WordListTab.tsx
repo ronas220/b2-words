@@ -106,12 +106,12 @@ export function WordListTab() {
           <p className="text-sm text-muted-foreground">Попробуйте изменить запрос.</p>
         </div>
       ) : (
-        <div className="card-shadow mt-2 overflow-hidden rounded-2xl border bg-card">
+        <div className="word-groups card-shadow mt-2 rounded-2xl border bg-card">
           {groups.map(([letter, words]) => (
             <div key={letter}>
               <div
                 id={`letter-${letter}`}
-                className="sticky top-[8.75rem] z-20 scroll-mt-36 border-b bg-secondary px-4 py-1.5 text-sm font-bold text-secondary-foreground"
+                className="letter-header sticky top-[8.75rem] z-20 scroll-mt-36 border-b bg-secondary px-4 py-1.5 text-sm font-bold text-secondary-foreground"
               >
                 {letter}
               </div>

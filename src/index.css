@@ -102,6 +102,17 @@
   .chip-rail::-webkit-scrollbar {
     display: none;
   }
+
+  /*
+   * Word-list groups: the card must NOT have overflow-hidden — that would make
+   * it the sticky scroll container and push letter headers `top` px below the
+   * card top instead of the viewport. Round only the first header's corners
+   * instead (rows have no background, so nothing else can poke out).
+   */
+  .word-groups > div:first-child > .letter-header {
+    border-top-left-radius: calc(1rem - 1px);
+    border-top-right-radius: calc(1rem - 1px);
+  }
 }
 
 /* ---- 3D flip card ---- */
