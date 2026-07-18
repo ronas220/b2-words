@@ -1,0 +1,182 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 250 33% 99%;
+    --foreground: 244 32% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 244 32% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 244 32% 15%;
+    --primary: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 245 60% 95%;
+    --secondary-foreground: 243 55% 38%;
+    --muted: 245 30% 95%;
+    --muted-foreground: 245 12% 46%;
+    --accent: 258 70% 96%;
+    --accent-foreground: 258 60% 40%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 245 22% 90%;
+    --input: 245 22% 88%;
+    --ring: 243 75% 59%;
+    --radius: 0.75rem;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 244 24% 5%;
+    --foreground: 240 22% 95%;
+    --card: 244 18% 9%;
+    --card-foreground: 240 22% 95%;
+    --popover: 244 18% 9%;
+    --popover-foreground: 240 22% 95%;
+    --primary: 243 82% 70%;
+    --primary-foreground: 244 40% 10%;
+    --secondary: 243 28% 17%;
+    --secondary-foreground: 243 70% 82%;
+    --muted: 243 16% 15%;
+    --muted-foreground: 240 14% 66%;
+    --accent: 258 32% 19%;
+    --accent-foreground: 258 75% 84%;
+    --destructive: 0 68% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 243 14% 17%;
+    --input: 243 14% 22%;
+    --ring: 243 82% 70%;
+    --sidebar-background: 244 18% 8%;
+    --sidebar-foreground: 240 20% 95%;
+    --sidebar-primary: 243 82% 70%;
+    --sidebar-primary-foreground: 244 40% 10%;
+    --sidebar-accent: 243 16% 15%;
+    --sidebar-accent-foreground: 240 20% 95%;
+    --sidebar-border: 243 14% 17%;
+    --sidebar-ring: 243 82% 70%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    -webkit-tap-highlight-color: transparent;
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    overscroll-behavior-y: none;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+}
+
+@layer components {
+  /* Layered soft shadow for elevated cards */
+  .card-shadow {
+    box-shadow:
+      0 1px 2px rgb(16 24 40 / 0.05),
+      0 10px 28px -10px rgb(76 29 149 / 0.14),
+      0 28px 56px -28px rgb(76 29 149 / 0.2);
+  }
+  .dark .card-shadow {
+    box-shadow:
+      0 1px 2px rgb(0 0 0 / 0.5),
+      0 16px 40px -14px rgb(0 0 0 / 0.6);
+  }
+
+  /* Hidden scrollbar for horizontal chip rails */
+  .chip-rail {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .chip-rail::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ---- 3D flip card ---- */
+.flip-scene {
+  perspective: 1400px;
+}
+.flip-inner {
+  display: grid;
+  transform-style: preserve-3d;
+  transition: transform 0.5s cubic-bezier(0.3, 1.28, 0.4, 1);
+}
+.flip-inner.flipped {
+  transform: rotateY(180deg);
+}
+.flip-face {
+  grid-area: 1 / 1;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+.flip-back {
+  transform: rotateY(180deg);
+}
+
+/* ---- swipe wrapper ---- */
+.swipe-wrap {
+  touch-action: pan-y;
+  will-change: transform;
+}
+.swipe-wrap.snapping {
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ---- entrance animations ---- */
+@keyframes tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.tab-enter {
+  animation: tab-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.pop-in {
+  animation: pop-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ---- reduced motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  body {
+    transition: none;
+  }
+  .flip-inner,
+  .swipe-wrap.snapping {
+    transition: none !important;
+  }
+  .tab-enter,
+  .pop-in {
+    animation: none !important;
+  }
+}
