@@ -180,9 +180,10 @@ export function QuizTab({ onNavigate }: { onNavigate: (tab: TabId) => void }) {
     if (settings.autoplay) speak(r[0].word.w);
   };
 
-  /** «Спринт»: fresh pass over ALL selected words, rounds of SPRINT_ROUND. */
-  const startSprint = () => {
-    const pool = shuffleArray(filterSelected(WORDS, (w) => w.w, selection));
+  /** «Спринт»: fresh pass over ALL selected words — or only `words` when given
+   *  (retry of the error list). Rounds of SPRINT_ROUND. */
+  const startSprint = (words?: WordEntry[]) => {
+    const pool = shuffleArray(words ?? filterSelected(WORDS, (w) => w.w, selection));
     if (pool.length === 0) return;
     const r = buildQuestions(pool.slice(0, SPRINT_ROUND));
     setSprintRest(pool.slice(SPRINT_ROUND));
@@ -436,7 +437,7 @@ export function QuizTab({ onNavigate }: { onNavigate: (tab: TabId) => void }) {
               />
               Серия: {streak} дн. · Сегодня {todayStudied}/{dailyGoal}
             </p>
-            {sprintStat.errors.length > 0 ? (
+            {sprintStat.errors.length > 0 && (
               <div className="max-h-44 w-full overflow-y-auto rounded-2xl border bg-muted/40 text-left">
                 <p className="border-b px-3 py-2 text-xs font-semibold text-muted-foreground">
                   Ошибки — ушли в 1 коробку ({sprintStat.errors.length}):
@@ -453,17 +454,32 @@ export function QuizTab({ onNavigate }: { onNavigate: (tab: TabId) => void }) {
                   ))}
                 </ul>
               </div>
+            )}
+            {sprintStat.errors.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => startSprint(sprintStat.errors)}
+                className="mt-1 flex h-14 items-center gap-2 rounded-2xl bg-primary px-8 text-base font-semibold text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-95"
+              >
+                <RotateCcw size={20} />
+                Повторить ошибки ({sprintStat.errors.length})
+              </button>
             ) : (
               <p className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">
-                Без ошибок — отлично! 🎉
+                Все слова закреплены! 🎉
               </p>
             )}
             <button
               type="button"
-              onClick={startSprint}
-              className="mt-1 flex h-14 items-center gap-2 rounded-2xl bg-primary px-8 text-base font-semibold text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-95"
+              onClick={() => startSprint()}
+              className={cn(
+                'flex items-center gap-2 font-semibold transition-all active:scale-95',
+                sprintStat.errors.length > 0
+                  ? 'h-11 rounded-full border bg-card px-5 text-sm text-muted-foreground hover:bg-muted'
+                  : 'mt-1 h-14 rounded-2xl bg-primary px-8 text-base text-primary-foreground shadow-sm hover:bg-primary/90',
+              )}
             >
-              <RotateCcw size={20} />
+              <RotateCcw size={sprintStat.errors.length > 0 ? 16 : 20} />
               Пройти ещё раз
             </button>
             <button
