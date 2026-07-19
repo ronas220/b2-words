@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import {
   BookOpenCheck,
   Check,
+  Flame,
   Hand,
   MoveLeft,
   MoveRight,
@@ -20,27 +21,43 @@ import { useAppState } from '@/state/app-state';
 import { useSpeech } from '@/hooks/useSpeech';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { celebrate, hapticTick } from '@/lib/celebrate';
+import { KNOWN_BOX, localDayKey } from '@/lib/srs';
 import { SpeakerButton } from '@/components/SpeakerButton';
 import { Progress } from '@/components/ui/progress';
 import { cn, shuffleArray } from '@/lib/utils';
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const SWIPE_THRESHOLD = 100;
+const NEW_PER_DAY_OPTIONS = [5, 10, 15, 25];
+const DAILY_GOAL_OPTIONS = [10, 20, 30, 50];
 
 interface FlashcardsTabProps {
   active: boolean;
 }
 
 export function FlashcardsTab({ active }: FlashcardsTabProps) {
-  const { known, knownCount, setWordKnown, resetProgress, settings, updateSettings } =
-    useAppState();
-  const { shuffle, letter, onlyUnlearned, autoplay } = settings;
+  const {
+    known,
+    knownCount,
+    srs,
+    activity,
+    todayStudied,
+    streak,
+    rateWord,
+    resetProgress,
+    settings,
+    updateSettings,
+  } = useAppState();
+  const { shuffle, letter, onlyUnlearned, autoplay, deckMode, newPerDay, dailyGoal } = settings;
+  const isPlan = deckMode === 'plan';
   const { speak } = useSpeech();
   const reducedMotion = useReducedMotion();
 
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [order, setOrder] = useState<string[] | null>(null);
+  /** Cards answered in «План» since entering the mode (session progress). */
+  const [planDone, setPlanDone] = useState(0);
   const interactedRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -50,18 +67,47 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
     [letter],
   );
 
-  const configKey = `${letter}|${onlyUnlearned ? 'u' : 'a'}|${shuffle ? 's' : 'n'}`;
+  const configKey = isPlan
+    ? 'plan'
+    : `${letter}|${onlyUnlearned ? 'u' : 'a'}|${shuffle ? 's' : 'n'}`;
 
-  // (Re)build the shuffle order only when the filter config changes and
-  // restore the persisted deck position for this config.
+  // (Re)build the free-mode shuffle order and restore the persisted deck
+  // position whenever the filter config or the deck mode changes.
   useEffect(() => {
-    setOrder(shuffle ? shuffleArray(baseDeck).map((w) => w.w) : null);
-    setIndex(settingsRef.current.deckPos[configKey] ?? 0);
+    if (settingsRef.current.deckMode === 'plan') {
+      setIndex(settingsRef.current.deckPos['plan'] ?? 0);
+    } else {
+      setOrder(shuffle ? shuffleArray(baseDeck).map((w) => w.w) : null);
+      setIndex(settingsRef.current.deckPos[configKey] ?? 0);
+    }
     setFlipped(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [letter, shuffle, onlyUnlearned, baseDeck]);
+  }, [letter, shuffle, onlyUnlearned, baseDeck, deckMode]);
+
+  /* ---------------- «План» queue: due reviews + today's new-word budget ---------------- */
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isPlan) return;
+    const t = window.setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, [isPlan]);
+
+  const plan = useMemo(() => {
+    if (!isPlan) return { queue: [] as WordEntry[], dueCount: 0, newCount: 0 };
+    const now = nowTick;
+    const due = WORDS.filter((w) => {
+      const rec = srs[w.w];
+      return rec !== undefined && rec.due <= now;
+    });
+    due.sort((a, b) => srs[a.w].due - srs[b.w].due); // oldest due first
+    const introduced = activity[localDayKey()]?.newIntroduced ?? 0;
+    const budget = Math.max(0, newPerDay - introduced);
+    const fresh = budget > 0 ? WORDS.filter((w) => srs[w.w] === undefined).slice(0, budget) : [];
+    return { queue: [...due, ...fresh], dueCount: due.length, newCount: fresh.length };
+  }, [isPlan, srs, activity, newPerDay, nowTick]);
 
   const deck = useMemo(() => {
+    if (isPlan) return plan.queue;
     let list = baseDeck;
     if (onlyUnlearned) list = list.filter((w) => !known[w.w]);
     if (order) {
@@ -69,15 +115,11 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
       list = [...list].sort((a, b) => (pos.get(a.w) ?? 0) - (pos.get(b.w) ?? 0));
     }
     return list;
-  }, [baseDeck, onlyUnlearned, known, order]);
+  }, [isPlan, plan.queue, baseDeck, onlyUnlearned, known, order]);
 
   const clamped = deck.length === 0 ? 0 : Math.min(index, deck.length - 1);
   const current: WordEntry | undefined = deck[clamped];
-
-  const deckKnown = useMemo(
-    () => baseDeck.reduce((n, w) => n + (known[w.w] ? 1 : 0), 0),
-    [baseDeck, known],
-  );
+  const currentIsNew = current !== undefined && srs[current.w] === undefined;
 
   // Autoplay: speak the word when a new card is shown — but never before
   // the first user gesture (mobile browsers block speech without one).
@@ -97,29 +139,53 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
     [configKey, updateSettings],
   );
 
-  const goNext = useCallback(
-    (markKnown: boolean) => {
+  const answer = useCallback(
+    (knew: boolean) => {
       if (!current) return;
       touch();
       hapticTick();
-      setWordKnown(current.w, markKnown);
+      // In free+onlyUnlearned the card leaves the deck only if this answer
+      // actually graduates it to «выучено» (box >= KNOWN_BOX).
+      const removedFromFree =
+        !isPlan &&
+        onlyUnlearned &&
+        knew &&
+        Math.min(5, (srs[current.w]?.box ?? 1) + 1) >= KNOWN_BOX;
+      rateWord(current.w, knew);
       setFlipped(false);
-      const removed = onlyUnlearned && markKnown;
-      const nextDeck = removed ? deck.filter((w) => w.w !== current.w) : deck;
+      if (isPlan) {
+        setPlanDone((d) => d + 1);
+        // The answered word always leaves the plan queue (next due >= +10 min),
+        // so the card at the same index is the next one to study.
+        const nextLen = deck.length - 1;
+        const nextIndex = nextLen <= 0 ? 0 : Math.min(clamped, nextLen - 1);
+        setIndex(nextIndex);
+        persistPos(nextIndex);
+        return;
+      }
+      const nextDeck = removedFromFree ? deck.filter((w) => w.w !== current.w) : deck;
       if (nextDeck.length === 0) {
         setIndex(0);
         persistPos(0);
         celebrate();
         return;
       }
-      const nextIndex = removed ? clamped % nextDeck.length : (clamped + 1) % nextDeck.length;
+      const nextIndex = removedFromFree ? clamped % nextDeck.length : (clamped + 1) % nextDeck.length;
       setIndex(nextIndex);
       persistPos(nextIndex);
       // finished a full pass through the deck
       if (nextIndex === 0 && deck.length > 1) celebrate();
     },
-    [current, deck, clamped, onlyUnlearned, setWordKnown, persistPos],
+    [current, deck, clamped, isPlan, onlyUnlearned, srs, rateWord, persistPos],
   );
+
+  // Confetti when the plan queue becomes empty after studying (not on a
+  // fresh visit with nothing due yet).
+  const prevLenRef = useRef(0);
+  useEffect(() => {
+    if (isPlan && prevLenRef.current > 0 && deck.length === 0) celebrate();
+    prevLenRef.current = deck.length;
+  }, [isPlan, deck.length]);
 
   /* ---------------- swipe gestures ---------------- */
   const [dragX, setDragX] = useState(0);
@@ -160,7 +226,7 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
       window.setTimeout(
         () => {
           setFly(0);
-          goNext(dir > 0);
+          answer(dir > 0);
         },
         reducedMotion ? 0 : 170,
       );
@@ -182,10 +248,10 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowRight') {
         e.preventDefault();
-        goNext(true);
+        answer(true);
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        goNext(false);
+        answer(false);
       } else if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
         touch();
@@ -194,12 +260,18 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, goNext]);
+  }, [active, answer]);
 
   /* ---------------- filter handlers ---------------- */
   const pickLetter = (l: string) => {
     touch();
     updateSettings({ letter: l });
+  };
+  const pickMode = (mode: 'plan' | 'free') => {
+    touch();
+    if (mode === deckMode) return;
+    if (mode === 'plan') setPlanDone(0);
+    updateSettings({ deckMode: mode });
   };
   const toggleShuffle = () => {
     touch();
@@ -218,28 +290,48 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
   };
 
   const onReset = () => {
-    if (window.confirm('Сбросить прогресс? Все отметки о выученных словах будут удалены.')) {
+    if (
+      window.confirm(
+        'Сбросить прогресс? Все отметки, повторения, статистика и серия будут удалены.',
+      )
+    ) {
       resetProgress();
       setIndex(0);
       setFlipped(false);
+      setPlanDone(0);
       persistPos(0);
     }
   };
 
-  const allLearned = onlyUnlearned && baseDeck.length > 0 && deck.length === 0;
+  const allLearned = !isPlan && onlyUnlearned && baseDeck.length > 0 && deck.length === 0;
+  const planTotal = planDone + deck.length;
 
   return (
     <div
       className="flex flex-col gap-2 py-2"
       style={{ height: 'calc(100dvh - 8.5rem - env(safe-area-inset-bottom))' }}
     >
-      {/* Stats header — compact single row */}
+      {/* Stats header — streak + today's goal, compact single row */}
       <section className="card-shadow rounded-2xl border bg-card p-2">
         <div className="flex items-center gap-2.5">
+          <span
+            className="streak-flame flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-bold"
+            title="Дней подряд с выполненной дневной целью"
+            aria-label={`Серия: ${streak} дн.`}
+          >
+            <Flame
+              size={15}
+              className={streak > 0 ? 'text-orange-500' : 'text-muted-foreground/40'}
+            />
+            {streak}
+          </span>
           <p className="shrink-0 whitespace-nowrap text-xs font-semibold">
-            Выучено: {knownCount} / {WORDS.length}
+            Сегодня {todayStudied}/{dailyGoal}
           </p>
-          <Progress value={(knownCount / WORDS.length) * 100} className="h-2 flex-1" />
+          <Progress
+            value={Math.min(100, (todayStudied / dailyGoal) * 100)}
+            className="h-2 flex-1"
+          />
           <button
             type="button"
             onClick={onReset}
@@ -255,31 +347,113 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
       {/* Controls */}
       <section className="flex flex-col gap-2">
         <div className="chip-rail -mx-4 overflow-x-auto px-4">
-          <div className="flex w-max gap-1.5">
-            <Chip active={letter === 'ALL'} onClick={() => pickLetter('ALL')}>
-              Все
-            </Chip>
-            {LETTERS.map((l) => (
-              <Chip key={l} active={letter === l} onClick={() => pickLetter(l)}>
-                {l}
-              </Chip>
-            ))}
+          <div className="flex w-max items-center gap-1.5">
+            <div
+              className="flex shrink-0 rounded-full border bg-card p-0.5"
+              role="group"
+              aria-label="Режим колоды"
+            >
+              <button
+                type="button"
+                aria-pressed={isPlan}
+                onClick={() => pickMode('plan')}
+                className={cn(
+                  'h-10 rounded-full px-3.5 text-sm font-semibold transition-all active:scale-95',
+                  isPlan
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-muted',
+                )}
+              >
+                План
+              </button>
+              <button
+                type="button"
+                aria-pressed={!isPlan}
+                onClick={() => pickMode('free')}
+                className={cn(
+                  'h-10 rounded-full px-3.5 text-sm font-semibold transition-all active:scale-95',
+                  !isPlan
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-muted',
+                )}
+              >
+                Свободно
+              </button>
+            </div>
+            {!isPlan && (
+              <>
+                <Chip active={letter === 'ALL'} onClick={() => pickLetter('ALL')}>
+                  Все
+                </Chip>
+                {LETTERS.map((l) => (
+                  <Chip key={l} active={letter === l} onClick={() => pickLetter(l)}>
+                    {l}
+                  </Chip>
+                ))}
+              </>
+            )}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Chip active={shuffle} onClick={toggleShuffle} icon={<Shuffle size={15} />}>
-            Перемешать
-          </Chip>
-          <Chip
-            active={onlyUnlearned}
-            onClick={toggleOnlyUnlearned}
-            icon={<BookOpenCheck size={15} />}
-          >
-            Только невыученные
-          </Chip>
-          <Chip active={autoplay} onClick={toggleAutoplay} icon={<Volume2 size={15} />}>
-            Автоозвучка
-          </Chip>
+        <div className="flex flex-wrap items-center gap-2">
+          {isPlan ? (
+            <>
+              <label className="flex h-11 shrink-0 items-center gap-1.5 rounded-full border bg-card px-3.5 text-sm text-muted-foreground">
+                Новых:
+                <select
+                  value={newPerDay}
+                  onChange={(e) => {
+                    touch();
+                    updateSettings({ newPerDay: Number(e.target.value) });
+                  }}
+                  aria-label="Новых слов в день"
+                  className="cursor-pointer bg-transparent font-semibold text-foreground outline-none"
+                >
+                  {NEW_PER_DAY_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex h-11 shrink-0 items-center gap-1.5 rounded-full border bg-card px-3.5 text-sm text-muted-foreground">
+                Цель:
+                <select
+                  value={dailyGoal}
+                  onChange={(e) => {
+                    touch();
+                    updateSettings({ dailyGoal: Number(e.target.value) });
+                  }}
+                  aria-label="Дневная цель ответов"
+                  className="cursor-pointer bg-transparent font-semibold text-foreground outline-none"
+                >
+                  {DAILY_GOAL_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Chip active={autoplay} onClick={toggleAutoplay} icon={<Volume2 size={15} />}>
+                Автоозвучка
+              </Chip>
+            </>
+          ) : (
+            <>
+              <Chip active={shuffle} onClick={toggleShuffle} icon={<Shuffle size={15} />}>
+                Перемешать
+              </Chip>
+              <Chip
+                active={onlyUnlearned}
+                onClick={toggleOnlyUnlearned}
+                icon={<BookOpenCheck size={15} />}
+              >
+                Только невыученные
+              </Chip>
+              <Chip active={autoplay} onClick={toggleAutoplay} icon={<Volume2 size={15} />}>
+                Автоозвучка
+              </Chip>
+            </>
+          )}
         </div>
       </section>
 
@@ -287,13 +461,30 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
         <>
           {/* Deck progress — single compact line */}
           <div className="flex items-center gap-2.5">
-            <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-              {clamped + 1} из {deck.length}
-            </span>
-            <Progress value={((clamped + 1) / deck.length) * 100} className="h-1.5 flex-1" />
-            <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-              выучено: {deckKnown}
-            </span>
+            {isPlan ? (
+              <>
+                <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                  {planDone}/{planTotal}
+                </span>
+                <Progress
+                  value={planTotal === 0 ? 0 : (planDone / planTotal) * 100}
+                  className="h-1.5 flex-1"
+                />
+                <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                  Повторить: {plan.dueCount} · Новых: {plan.newCount}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                  {clamped + 1} из {deck.length}
+                </span>
+                <Progress value={((clamped + 1) / deck.length) * 100} className="h-1.5 flex-1" />
+                <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                  выучено: {knownCount}
+                </span>
+              </>
+            )}
           </div>
 
           {/* Swipe + flip card — takes all remaining height */}
@@ -322,6 +513,11 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
               <div className={cn('flip-inner h-full', flipped && 'flipped')}>
                 {/* Front */}
                 <div className="flip-face card-shadow relative flex h-full flex-col items-center justify-center gap-2 overflow-hidden rounded-3xl border border-primary/10 bg-gradient-to-br from-card via-card to-indigo-100/70 p-4 dark:to-indigo-950/40">
+                  {isPlan && currentIsNew && (
+                    <span className="absolute left-3.5 top-3.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">
+                      новое
+                    </span>
+                  )}
                   <SpeakerButton
                     text={current.w}
                     size={22}
@@ -380,7 +576,7 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
           <div className="flex gap-3">
             <button
               type="button"
-              onClick={() => goNext(false)}
+              onClick={() => answer(false)}
               className="flex h-14 flex-1 items-center justify-center gap-2 rounded-2xl border-2 border-orange-200 bg-card text-base font-semibold text-orange-600 shadow-sm transition-all hover:bg-orange-50 active:scale-95 dark:border-orange-500/30 dark:text-orange-400 dark:hover:bg-orange-500/10"
             >
               <X size={20} />
@@ -388,7 +584,7 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
             </button>
             <button
               type="button"
-              onClick={() => goNext(true)}
+              onClick={() => answer(true)}
               className="flex h-14 flex-1 items-center justify-center gap-2 rounded-2xl bg-primary text-base font-semibold text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-95"
             >
               <Check size={20} />
@@ -396,6 +592,25 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
             </button>
           </div>
         </>
+      ) : isPlan ? (
+        /* «План» finished — celebration state */
+        <div className="card-shadow flex min-h-[220px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
+          <span className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">
+            <PartyPopper size={30} />
+          </span>
+          <p className="font-display text-lg font-bold">План на сегодня выполнен!</p>
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <Flame size={15} className={streak > 0 ? 'text-orange-500' : 'text-muted-foreground/40'} />
+            Серия: {streak} дн. · Сегодня {todayStudied}/{dailyGoal}
+          </p>
+          <button
+            type="button"
+            onClick={() => pickMode('free')}
+            className="mt-1 flex h-11 items-center rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-all active:scale-95"
+          >
+            Продолжить в свободном режиме
+          </button>
+        </div>
       ) : (
         <div className="card-shadow flex min-h-[220px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
           {allLearned ? (

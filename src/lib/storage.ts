@@ -11,6 +11,12 @@ export interface Settings {
   /** Persisted deck position, keyed by filter config "letter|mode|shuffle". */
   deckPos: Record<string, number>;
   seenOnboarding: boolean;
+  /** Flashcards deck mode: SRS daily plan queue or free browsing. */
+  deckMode: 'plan' | 'free';
+  /** Daily budget of NEW words introduced in «План» mode. */
+  newPerDay: number; // 5 | 10 | 15 | 25
+  /** Daily goal of card answers (Знаю/Не знаю) for the streak. */
+  dailyGoal: number; // 10 | 20 | 30 | 50
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -21,6 +27,9 @@ export const DEFAULT_SETTINGS: Settings = {
   dark: false,
   deckPos: {},
   seenOnboarding: false,
+  deckMode: 'plan',
+  newPerDay: 15,
+  dailyGoal: 20,
 };
 
 export function loadKnown(): Record<string, true> {
@@ -71,6 +80,13 @@ export function loadSettings(): Settings {
         // dark falls back to the OS preference only until explicitly stored
         dark: typeof p.dark === 'boolean' ? p.dark : base.dark,
         deckPos: p.deckPos && typeof p.deckPos === 'object' ? p.deckPos : {},
+        deckMode: p.deckMode === 'free' ? 'free' : 'plan',
+        newPerDay: [5, 10, 15, 25].includes(Number(p.newPerDay))
+          ? Number(p.newPerDay)
+          : base.newPerDay,
+        dailyGoal: [10, 20, 30, 50].includes(Number(p.dailyGoal))
+          ? Number(p.dailyGoal)
+          : base.dailyGoal,
       };
     }
     return base;

@@ -1,17 +1,35 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import {
-  loadKnown,
-  loadSettings,
-  saveKnown,
-  saveSettings,
-} from '@/lib/storage';
+import { loadSettings, saveSettings } from '@/lib/storage';
 import type { Settings } from '@/lib/storage';
+import {
+  BOX_INTERVALS,
+  clearActivity,
+  clearSrs,
+  computeStreak,
+  knownFromSrs,
+  loadActivity,
+  loadSrs,
+  localDayKey,
+  rate,
+  recordAnswer,
+  saveActivity,
+  saveSrs,
+} from '@/lib/srs';
+import type { ActivityMap, SrsState } from '@/lib/srs';
 
 interface AppState {
+  /** Derived from SRS: words with box >= 3 count as «выучено». */
   known: Record<string, true>;
   knownCount: number;
+  srs: SrsState;
+  activity: ActivityMap;
+  todayStudied: number;
+  streak: number;
+  /** Manual «выучено» toggle (List tab): check → box 5, uncheck → remove record. */
   setWordKnown: (word: string, isKnown: boolean) => void;
+  /** Card answer (Знаю/Не знаю): rates the Leitner box and logs daily activity. */
+  rateWord: (word: string, knew: boolean) => void;
   resetProgress: () => void;
   settings: Settings;
   updateSettings: (patch: Partial<Settings>) => void;
@@ -20,8 +38,11 @@ interface AppState {
 const AppStateContext = createContext<AppState | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
-  const [known, setKnown] = useState<Record<string, true>>(() => loadKnown());
+  const [srs, setSrs] = useState<SrsState>(() => loadSrs());
+  const [activity, setActivity] = useState<ActivityMap>(() => loadActivity());
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
+  const srsRef = useRef(srs);
+  srsRef.current = srs;
 
   // Apply the theme class to <html> and keep the theme-color meta in sync.
   useEffect(() => {
@@ -36,23 +57,41 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [settings.dark]);
 
   const setWordKnown = useCallback((word: string, isKnown: boolean) => {
-    setKnown((prev) => {
+    setSrs((prev) => {
       const next = { ...prev };
       if (isKnown) {
-        next[word] = true;
+        next[word] = {
+          box: 5,
+          due: Date.now() + BOX_INTERVALS[5],
+          lapses: prev[word]?.lapses ?? 0,
+        };
       } else {
         delete next[word];
       }
-      saveKnown(next);
+      saveSrs(next);
+      return next;
+    });
+  }, []);
+
+  const rateWord = useCallback((word: string, knew: boolean) => {
+    const wasNew = srsRef.current[word] === undefined;
+    setSrs((prev) => {
+      const next = rate(prev, word, knew);
+      saveSrs(next);
+      return next;
+    });
+    setActivity((prev) => {
+      const next = recordAnswer(prev, wasNew);
+      saveActivity(next);
       return next;
     });
   }, []);
 
   const resetProgress = useCallback(() => {
-    setKnown(() => {
-      saveKnown({});
-      return {};
-    });
+    clearSrs();
+    clearActivity();
+    setSrs({});
+    setActivity({});
   }, []);
 
   const updateSettings = useCallback((patch: Partial<Settings>) => {
@@ -63,17 +102,23 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const value = useMemo<AppState>(
-    () => ({
+  const value = useMemo<AppState>(() => {
+    const known = knownFromSrs(srs);
+    const today = localDayKey();
+    return {
       known,
       knownCount: Object.keys(known).length,
+      srs,
+      activity,
+      todayStudied: activity[today]?.studied ?? 0,
+      streak: computeStreak(activity, settings.dailyGoal),
       setWordKnown,
+      rateWord,
       resetProgress,
       settings,
       updateSettings,
-    }),
-    [known, setWordKnown, resetProgress, settings, updateSettings],
-  );
+    };
+  }, [srs, activity, setWordKnown, rateWord, resetProgress, settings, updateSettings]);
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
 }

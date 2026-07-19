@@ -1,0 +1,14 @@
+PASS new+knew → box 2 / due +1d
+PASS box2+knew → box 3 / due +3d / lapses kept
+PASS box3+lapse → box 1 / due +10min / lapses+1
+PASS box5+knew → box 5 cap / due +21d
+PASS knownFromSrs = box>=3
+PASS migrate known → box 5 / due +21d
+PASS streak (today below goal) ends yesterday
+PASS streak (today at goal) includes today
+PASS streak broken by gap days
+PASS recordAnswer(new) bumps studied+new
+PASS recordAnswer prunes >120d
+PASS recordAnswer(known) bumps studied only
+
+SRS-MATH OK — 12 passed, 0 failed
