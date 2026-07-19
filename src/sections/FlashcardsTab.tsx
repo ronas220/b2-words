@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import type { ChangeEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import {
   BookOpenCheck,
   Check,
+  ClipboardList,
+  Download,
   Flame,
   Hand,
   ListChecks,
@@ -13,6 +15,7 @@ import {
   RotateCcw,
   SearchX,
   Shuffle,
+  Upload,
   Volume2,
   X,
 } from 'lucide-react';
@@ -24,15 +27,23 @@ import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { celebrate, hapticTick } from '@/lib/celebrate';
 import { KNOWN_BOX, buildPlanQueue, introducedToday } from '@/lib/srs';
 import { filterSelected } from '@/lib/selection';
+import type { SprintSession } from '@/lib/sprint';
+import { answerSprint, createSprint, sprintComplete } from '@/lib/sprint';
+import { applyBackup, backupFileName, buildBackup, parseBackup } from '@/lib/backup';
 import { SpeakerButton } from '@/components/SpeakerButton';
 import { Progress } from '@/components/ui/progress';
 import type { TabId } from '@/components/BottomNav';
-import { cn, shuffleArray } from '@/lib/utils';
+import type { StudyMode } from '@/lib/storage';
+import { cn, pluralRu, shuffleArray } from '@/lib/utils';
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const SWIPE_THRESHOLD = 100;
 const NEW_PER_DAY_OPTIONS = [5, 10, 15, 25];
 const DAILY_GOAL_OPTIONS = [10, 20, 30, 50];
+const ALL_WORDS = WORDS.map((w) => w.w);
+const VALID_WORDS = new Set(ALL_WORDS);
+/** sessionStorage flag read by App.tsx to show the post-import toast after reload. */
+const IMPORT_TOAST_KEY = 'b2words.importToast';
 
 interface FlashcardsTabProps {
   active: boolean;
@@ -55,6 +66,7 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
   } = useAppState();
   const { shuffle, letter, onlyUnlearned, autoplay, deckMode, newPerDay, dailyGoal } = settings;
   const isPlan = deckMode === 'plan';
+  const isSprint = deckMode === 'sprint';
   const { speak } = useSpeech();
   const reducedMotion = useReducedMotion();
 
@@ -63,6 +75,11 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
   const [order, setOrder] = useState<string[] | null>(null);
   /** Cards answered in «План» since entering the mode (session progress). */
   const [planDone, setPlanDone] = useState(0);
+  /** «Спринт» session over the whole selection (no daily limits). */
+  const [sprint, setSprint] = useState<SprintSession<WordEntry> | null>(null);
+  /** Inline feedback for export/import (ok or error). */
+  const [dataMsg, setDataMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const interactedRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -103,8 +120,33 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
     return buildPlanQueue(pool, (w) => w.w, srs, newPerDay, introducedToday(activity), nowTick);
   }, [isPlan, srs, activity, newPerDay, nowTick, selection]);
 
-  /** «Выбор» tab deselected everything — plan modes explain where to go. */
+  /** «Выбор» tab deselected everything — plan/sprint modes explain where to go. */
   const selectionEmpty = selection !== null && selection.size === 0;
+
+  /* ---------------- «Спринт» session: all selected words, shuffled ---------------- */
+  // (Re)created when entering the mode or when the selection changes; an
+  // in-progress session survives plain re-renders.
+  const sprintSelRef = useRef(selection);
+  useEffect(() => {
+    if (settingsRef.current.deckMode !== 'sprint') {
+      sprintSelRef.current = selection;
+      return;
+    }
+    setSprint((prev) => {
+      if (prev !== null && sprintSelRef.current === selection) return prev;
+      sprintSelRef.current = selection;
+      const pool = filterSelected(WORDS, (w) => w.w, selection);
+      return createSprint(pool, shuffleArray);
+    });
+  }, [deckMode, selection]);
+
+  const restartSprint = useCallback(() => {
+    hapticTick();
+    setFlipped(false);
+    const pool = filterSelected(WORDS, (w) => w.w, selection);
+    sprintSelRef.current = selection;
+    setSprint(createSprint(pool, shuffleArray));
+  }, [selection]);
 
   const deck = useMemo(() => {
     if (isPlan) return plan.queue;
@@ -118,7 +160,7 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
   }, [isPlan, plan.queue, baseDeck, onlyUnlearned, known, order]);
 
   const clamped = deck.length === 0 ? 0 : Math.min(index, deck.length - 1);
-  const current: WordEntry | undefined = deck[clamped];
+  const current: WordEntry | undefined = isSprint ? sprint?.remaining[0] : deck[clamped];
   const currentIsNew = current !== undefined && srs[current.w] === undefined;
 
   // Autoplay: speak the word when a new card is shown — but never before
@@ -153,6 +195,14 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
         Math.min(5, (srs[current.w]?.box ?? 1) + 1) >= KNOWN_BOX;
       rateWord(current.w, knew);
       setFlipped(false);
+      if (isSprint) {
+        // «Знаю» clears the card; «Не знаю» returns it ~3 cards later.
+        if (!sprint) return;
+        const next = answerSprint(sprint, knew);
+        setSprint(next);
+        if (sprintComplete(next)) celebrate();
+        return;
+      }
       if (isPlan) {
         setPlanDone((d) => d + 1);
         // The answered word always leaves the plan queue (next due >= +10 min),
@@ -176,7 +226,7 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
       // finished a full pass through the deck
       if (nextIndex === 0 && deck.length > 1) celebrate();
     },
-    [current, deck, clamped, isPlan, onlyUnlearned, srs, rateWord, persistPos],
+    [current, deck, clamped, isPlan, isSprint, sprint, onlyUnlearned, srs, rateWord, persistPos],
   );
 
   // Confetti when the plan queue becomes empty after studying (not on a
@@ -267,7 +317,7 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
     touch();
     updateSettings({ letter: l });
   };
-  const pickMode = (mode: 'plan' | 'free') => {
+  const pickMode = (mode: StudyMode) => {
     touch();
     if (mode === deckMode) return;
     if (mode === 'plan') setPlanDone(0);
@@ -303,8 +353,68 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
     }
   };
 
-  const allLearned = !isPlan && onlyUnlearned && baseDeck.length > 0 && deck.length === 0;
+  const allLearned = deckMode === 'free' && onlyUnlearned && baseDeck.length > 0 && deck.length === 0;
   const planTotal = planDone + deck.length;
+
+  /* ---------------- «Данные»: export / import ---------------- */
+  const onExport = () => {
+    touch();
+    hapticTick();
+    const backup = buildBackup({ srs, activity, selection, settings }, ALL_WORDS);
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = backupFileName();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setDataMsg({ kind: 'ok', text: 'Бэкап скачан: SRS-прогресс, выбор слов, статистика и настройки.' });
+  };
+
+  const onImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow picking the same file again
+    if (!file) return;
+    touch();
+    let text: string;
+    try {
+      text = await file.text();
+    } catch {
+      setDataMsg({ kind: 'err', text: 'Не удалось прочитать файл.' });
+      return;
+    }
+    const res = parseBackup(text, VALID_WORDS, ALL_WORDS);
+    if (!res.ok) {
+      setDataMsg({ kind: 'err', text: res.error });
+      return;
+    }
+    const confirmed = window.confirm(
+      'Импорт заменит текущие данные: SRS-прогресс, выбор слов, статистику и настройки.\n\n' +
+        `В файле: ${res.wordsInWork} ${pluralRu(res.wordsInWork, 'слово', 'слова', 'слов')} в работе, ` +
+        `стрик ${res.streak} ${pluralRu(res.streak, 'день', 'дня', 'дней')}. Продолжить?`,
+    );
+    if (!confirmed) return;
+    applyBackup(res.data, ALL_WORDS);
+    try {
+      sessionStorage.setItem(
+        IMPORT_TOAST_KEY,
+        `Импортировано: ${res.wordsInWork} ${pluralRu(res.wordsInWork, 'слово', 'слова', 'слов')} в работе, ` +
+          `стрик ${res.streak} ${pluralRu(res.streak, 'день', 'дня', 'дней')}.`,
+      );
+    } catch {
+      // toast is best-effort; the data is already applied
+    }
+    window.location.reload();
+  };
+
+  // Auto-hide the export/import feedback line.
+  useEffect(() => {
+    if (!dataMsg) return;
+    const t = window.setTimeout(() => setDataMsg(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [dataMsg]);
 
   return (
     <div
@@ -353,34 +463,30 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
               role="group"
               aria-label="Режим колоды"
             >
-              <button
-                type="button"
-                aria-pressed={isPlan}
-                onClick={() => pickMode('plan')}
-                className={cn(
-                  'h-10 rounded-full px-3.5 text-sm font-semibold transition-all active:scale-95',
-                  isPlan
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'text-muted-foreground hover:bg-muted',
-                )}
-              >
-                План
-              </button>
-              <button
-                type="button"
-                aria-pressed={!isPlan}
-                onClick={() => pickMode('free')}
-                className={cn(
-                  'h-10 rounded-full px-3.5 text-sm font-semibold transition-all active:scale-95',
-                  !isPlan
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'text-muted-foreground hover:bg-muted',
-                )}
-              >
-                Свободно
-              </button>
+              {(
+                [
+                  ['plan', 'План'],
+                  ['sprint', 'Спринт'],
+                  ['free', 'Свободно'],
+                ] as const
+              ).map(([m, label]) => (
+                <button
+                  key={m}
+                  type="button"
+                  aria-pressed={deckMode === m}
+                  onClick={() => pickMode(m)}
+                  className={cn(
+                    'h-10 rounded-full px-3 text-sm font-semibold transition-all active:scale-95',
+                    deckMode === m
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
-            {!isPlan && (
+            {deckMode === 'free' && (
               <>
                 <Chip active={letter === 'ALL'} onClick={() => pickLetter('ALL')}>
                   Все
@@ -437,6 +543,10 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
                 Автоозвучка
               </Chip>
             </>
+          ) : isSprint ? (
+            <Chip active={autoplay} onClick={toggleAutoplay} icon={<Volume2 size={15} />}>
+              Автоозвучка
+            </Chip>
           ) : (
             <>
               <Chip active={shuffle} onClick={toggleShuffle} icon={<Shuffle size={15} />}>
@@ -454,7 +564,53 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
               </Chip>
             </>
           )}
+          {/* «Данные»: backup export/import — visible in every mode */}
+          <button
+            type="button"
+            onClick={onExport}
+            className="flex h-9 items-center gap-1.5 rounded-full border bg-card px-3 text-xs font-semibold text-muted-foreground transition-all hover:bg-muted active:scale-95"
+          >
+            <Download size={14} />
+            Экспорт
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              touch();
+              fileRef.current?.click();
+            }}
+            className="flex h-9 items-center gap-1.5 rounded-full border bg-card px-3 text-xs font-semibold text-muted-foreground transition-all hover:bg-muted active:scale-95"
+          >
+            <Upload size={14} />
+            Импорт
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={onImportFile}
+          />
         </div>
+        {isSprint && selection === null && (
+          <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+            Сейчас выбраны все {WORDS.length} слов — можно сузить во вкладке «Выбор».
+          </p>
+        )}
+        {dataMsg && (
+          <p
+            className={cn(
+              'pop-in rounded-2xl border px-4 py-2 text-xs font-medium',
+              dataMsg.kind === 'err'
+                ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300',
+            )}
+          >
+            {dataMsg.text}
+          </p>
+        )}
       </section>
 
       {current ? (
@@ -474,6 +630,23 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
                   Повторить: {plan.dueCount} · Новых: {plan.newCount}
                 </span>
               </>
+            ) : isSprint && sprint ? (
+              <>
+                <span className="shrink-0 whitespace-nowrap text-xs font-semibold">
+                  Осталось {sprint.remaining.length} из {sprint.total}
+                </span>
+                <Progress
+                  value={
+                    sprint.total === 0
+                      ? 0
+                      : ((sprint.total - sprint.remaining.length) / sprint.total) * 100
+                  }
+                  className="h-1.5 flex-1"
+                />
+                <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                  Спринт
+                </span>
+              </>
             ) : (
               <>
                 <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
@@ -490,7 +663,7 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
           {/* Swipe + flip card — takes all remaining height */}
           <div
             className={cn(
-              'swipe-wrap relative min-h-[220px] flex-1 select-none',
+              'swipe-wrap relative min-h-[200px] flex-1 select-none',
               !dragging && 'snapping',
             )}
             style={{ transform: `translateX(${effectiveX}px) rotate(${rotation}deg)` }}
@@ -592,15 +765,15 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
             </button>
           </div>
         </>
-      ) : isPlan && selectionEmpty ? (
+      ) : (isPlan || isSprint) && selectionEmpty ? (
         /* «Выбор» has no words — point there */
-        <div className="card-shadow flex min-h-[220px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
+        <div className="card-shadow flex min-h-[200px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
           <span className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400">
             <ListChecks size={30} />
           </span>
           <p className="font-display text-lg font-bold">Нет выбранных слов</p>
           <p className="text-sm text-muted-foreground">
-            Перейдите во вкладку «Выбор» и отметьте слова для плана.
+            Перейдите во вкладку «Выбор» и отметьте слова для плана или спринта.
           </p>
           <button
             type="button"
@@ -610,9 +783,52 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
             Открыть выбор
           </button>
         </div>
+      ) : isSprint ? (
+        /* «Спринт» finished — offer the quiz sprint as the next step */
+        sprint && sprintComplete(sprint) ? (
+          <div className="card-shadow flex min-h-[200px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
+            <span className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">
+              <PartyPopper size={30} />
+            </span>
+            <p className="font-display text-lg font-bold">Спринт завершён!</p>
+            <p className="text-sm text-muted-foreground">
+              {sprint.total} {pluralRu(sprint.total, 'слово', 'слова', 'слов')} пройдено
+            </p>
+            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Flame size={15} className={streak > 0 ? 'text-orange-500' : 'text-muted-foreground/40'} />
+              Серия: {streak} дн. · Сегодня {todayStudied}/{dailyGoal}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                touch();
+                hapticTick();
+                updateSettings({ quizMode: 'sprint' });
+                onNavigate('quiz');
+              }}
+              className="mt-1 flex h-11 items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-all active:scale-95"
+            >
+              <ClipboardList size={18} />
+              Протестироваться
+            </button>
+            <button
+              type="button"
+              onClick={restartSprint}
+              className="flex h-11 items-center gap-2 rounded-full border bg-card px-5 text-sm font-semibold text-muted-foreground transition-all hover:bg-muted active:scale-95"
+            >
+              <RotateCcw size={16} />
+              Ещё раз
+            </button>
+          </div>
+        ) : (
+          /* session is being assembled (one frame after entering the mode) */
+          <div className="card-shadow flex min-h-[200px] flex-1 items-center justify-center rounded-3xl border bg-card p-6">
+            <p className="text-sm text-muted-foreground">Готовим спринт…</p>
+          </div>
+        )
       ) : isPlan ? (
         /* «План» finished — celebration state */
-        <div className="card-shadow flex min-h-[220px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
+        <div className="card-shadow flex min-h-[200px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
           <span className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">
             <PartyPopper size={30} />
           </span>
@@ -630,7 +846,7 @@ export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
           </button>
         </div>
       ) : (
-        <div className="card-shadow flex min-h-[220px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
+        <div className="card-shadow flex min-h-[200px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
           {allLearned ? (
             <>
               <span className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">

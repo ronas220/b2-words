@@ -2,6 +2,9 @@ export const KNOWN_KEY = 'b2words.known.v1';
 export const SETTINGS_KEY = 'b2words.settings.v1';
 export const BEST_SCORE_KEY = 'b2words.bestscore.v1';
 
+/** Study mode for Карточки (deckMode) and Тест (quizMode). */
+export type StudyMode = 'plan' | 'sprint' | 'free';
+
 export interface Settings {
   shuffle: boolean;
   letter: string; // 'ALL' or 'A'..'Z'
@@ -11,10 +14,10 @@ export interface Settings {
   /** Persisted deck position, keyed by filter config "letter|mode|shuffle". */
   deckPos: Record<string, number>;
   seenOnboarding: boolean;
-  /** Flashcards deck mode: SRS daily plan queue or free browsing. */
-  deckMode: 'plan' | 'free';
-  /** Quiz mode: SRS daily plan queue or random questions. */
-  quizMode: 'plan' | 'free';
+  /** Flashcards mode: SRS daily plan, sprint over the selection, or free browsing. */
+  deckMode: StudyMode;
+  /** Quiz mode: SRS daily plan, sprint over the selection, or random questions. */
+  quizMode: StudyMode;
   /** Daily budget of NEW words introduced in «План» mode. */
   newPerDay: number; // 5 | 10 | 15 | 25
   /** Daily goal of card answers (Знаю/Не знаю) for the streak. */
@@ -69,6 +72,36 @@ function systemPrefersDark(): boolean {
   }
 }
 
+function pickMode(v: unknown, fallback: StudyMode): StudyMode {
+  return v === 'plan' || v === 'sprint' || v === 'free' ? v : fallback;
+}
+
+/**
+ * Merge a possibly-partial / possibly-dirty settings object over `base`,
+ * validating every field (used by loadSettings and by backup import).
+ */
+export function sanitizeSettings(p: Partial<Settings>, base: Settings): Settings {
+  const bool = (v: unknown, fb: boolean): boolean => (typeof v === 'boolean' ? v : fb);
+  return {
+    ...base,
+    shuffle: bool(p.shuffle, base.shuffle),
+    letter: typeof p.letter === 'string' ? p.letter : base.letter,
+    onlyUnlearned: bool(p.onlyUnlearned, base.onlyUnlearned),
+    autoplay: bool(p.autoplay, base.autoplay),
+    dark: bool(p.dark, base.dark),
+    deckPos: p.deckPos && typeof p.deckPos === 'object' ? p.deckPos : {},
+    seenOnboarding: bool(p.seenOnboarding, base.seenOnboarding),
+    deckMode: pickMode(p.deckMode, base.deckMode),
+    quizMode: pickMode(p.quizMode, base.quizMode),
+    newPerDay: [5, 10, 15, 25].includes(Number(p.newPerDay))
+      ? Number(p.newPerDay)
+      : base.newPerDay,
+    dailyGoal: [10, 20, 30, 50].includes(Number(p.dailyGoal))
+      ? Number(p.dailyGoal)
+      : base.dailyGoal,
+  };
+}
+
 export function loadSettings(): Settings {
   const base: Settings = { ...DEFAULT_SETTINGS, dark: systemPrefersDark() };
   try {
@@ -76,22 +109,7 @@ export function loadSettings(): Settings {
     if (!raw) return base;
     const parsed: unknown = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
-      const p = parsed as Partial<Settings>;
-      return {
-        ...base,
-        ...p,
-        // dark falls back to the OS preference only until explicitly stored
-        dark: typeof p.dark === 'boolean' ? p.dark : base.dark,
-        deckPos: p.deckPos && typeof p.deckPos === 'object' ? p.deckPos : {},
-        deckMode: p.deckMode === 'free' ? 'free' : 'plan',
-        quizMode: p.quizMode === 'free' ? 'free' : 'plan',
-        newPerDay: [5, 10, 15, 25].includes(Number(p.newPerDay))
-          ? Number(p.newPerDay)
-          : base.newPerDay,
-        dailyGoal: [10, 20, 30, 50].includes(Number(p.dailyGoal))
-          ? Number(p.dailyGoal)
-          : base.dailyGoal,
-      };
+      return sanitizeSettings(parsed as Partial<Settings>, base);
     }
     return base;
   } catch {

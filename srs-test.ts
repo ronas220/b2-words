@@ -20,6 +20,15 @@ import {
   serializeSelection,
 } from './src/lib/selection';
 import type { SelectionSet } from './src/lib/selection';
+import { backupFileName, buildBackup, parseBackup } from './src/lib/backup';
+import { DEFAULT_SETTINGS } from './src/lib/storage';
+import {
+  SPRINT_REINSERT_GAP,
+  answerSprint,
+  createSprint,
+  sprintComplete,
+  sprintLeft,
+} from './src/lib/sprint';
 
 const NOW = 1_750_000_000_000; // fixed epoch ms for deterministic checks
 let pass = 0;
@@ -224,6 +233,165 @@ const VALID = new Set(ALL);
     due: 1,
     fresh: 1,
   });
+}
+
+/* ---------------- backup export/import ---------------- */
+
+// 16. Backup round-trip: build → stringify → parse preserves all four sections.
+{
+  const input = {
+    srs: {
+      a: { box: 2 as const, due: 123, lapses: 1 },
+      c: { box: 5 as const, due: 999, lapses: 0 },
+    },
+    activity: { '2025-06-15': { studied: 25, newIntroduced: 5 } },
+    selection: new Set(['a', 'c']) as SelectionSet,
+    settings: { ...DEFAULT_SETTINGS, dailyGoal: 30, newPerDay: 25, dark: true },
+  };
+  const file = buildBackup(input, ALL, new Date(NOW));
+  eq('backup header', { app: file.app, version: file.version, iso: file.exportedAt.includes('T') }, {
+    app: 'b2-words',
+    version: 1,
+    iso: true,
+  });
+  const parsed = parseBackup(JSON.stringify(file), VALID, ALL);
+  eq('backup round-trip ok', parsed.ok, true);
+  if (parsed.ok) {
+    eq('backup srs preserved', parsed.data.srs, input.srs);
+    eq('backup activity preserved', parsed.data.activity, input.activity);
+    eq('backup selection preserved', [...(parsed.data.selection ?? [])].sort(), ['a', 'c']);
+    eq('backup settings preserved', [parsed.data.settings.dailyGoal, parsed.data.settings.dark], [
+      30,
+      true,
+    ]);
+    eq('backup wordsInWork', parsed.wordsInWork, 2);
+  }
+}
+
+// 17. Broken JSON / wrong app / wrong version are rejected with messages.
+{
+  const bad1 = parseBackup('{oops', VALID, ALL);
+  eq('broken JSON rejected', [bad1.ok, !bad1.ok && bad1.error.length > 0], [false, true]);
+  const file = buildBackup(
+    { srs: {}, activity: {}, selection: null, settings: DEFAULT_SETTINGS },
+    ALL,
+  );
+  const bad2 = parseBackup(JSON.stringify({ ...file, app: 'other-app' }), VALID, ALL);
+  eq('wrong app rejected', bad2.ok, false);
+  const bad3 = parseBackup(JSON.stringify({ ...file, version: 2 }), VALID, ALL);
+  eq('wrong version rejected', [bad3.ok, !bad3.ok && bad3.error.includes('версия')], [false, true]);
+  const bad4 = parseBackup(JSON.stringify({ app: 'b2-words', version: 1 }), VALID, ALL);
+  eq('missing data rejected', bad4.ok, false);
+}
+
+// 18. Import drops unknown word-ids and malformed records; sanitizes settings/activity.
+{
+  const file = {
+    app: 'b2-words',
+    version: 1,
+    exportedAt: 'x',
+    data: {
+      srs: {
+        a: { box: 3, due: 10, lapses: 2 },
+        zz: { box: 3, due: 10, lapses: 0 }, // unknown word
+        b: { box: 9, due: 10, lapses: 0 }, // invalid box
+        c: { box: 2, due: 'soon', lapses: 0 }, // invalid due
+      },
+      activity: {
+        '2025-06-15': { studied: 5.7, newIntroduced: 1 },
+        'not-a-date': { studied: 3, newIntroduced: 0 },
+        '2025-06-16': 'junk',
+      },
+      selection: { m: 'inc', w: ['a', 'zz'] },
+      settings: { newPerDay: 999, dailyGoal: 7, dark: true, deckMode: 'sprint' },
+    },
+  };
+  const parsed = parseBackup(JSON.stringify(file), VALID, ALL);
+  eq('dirty backup still parses', parsed.ok, true);
+  if (parsed.ok) {
+    eq('unknown/invalid srs dropped', parsed.data.srs, { a: { box: 3, due: 10, lapses: 2 } });
+    eq('activity sanitized', parsed.data.activity, {
+      '2025-06-15': { studied: 5, newIntroduced: 1 },
+    });
+    eq('selection unknown dropped', [...(parsed.data.selection ?? [])], ['a']);
+    eq('settings sanitized', [
+      parsed.data.settings.newPerDay,
+      parsed.data.settings.dailyGoal,
+      parsed.data.settings.dark,
+      parsed.data.settings.deckMode,
+    ], [15, 20, true, 'sprint']);
+  }
+}
+
+// 19. Backup filename carries the local date; streak computed from imported activity.
+{
+  eq('backup filename', backupFileName(new Date(2025, 5, 15)), 'b2words-backup-2025-06-15.json');
+  const dayKey = (offset: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - offset);
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${m}-${day}`;
+  };
+  const file = {
+    app: 'b2-words',
+    version: 1,
+    exportedAt: 'x',
+    data: {
+      srs: {},
+      activity: {
+        [dayKey(0)]: { studied: 25, newIntroduced: 0 },
+        [dayKey(1)]: { studied: 20, newIntroduced: 0 },
+      },
+      selection: { m: 'all' },
+      settings: { dailyGoal: 20 },
+    },
+  };
+  const parsed = parseBackup(JSON.stringify(file), VALID, ALL);
+  eq('streak from imported activity', parsed.ok && parsed.streak, 2);
+}
+
+/* ---------------- sprint deck («Спринт») ---------------- */
+
+// 20. createSprint: totals + optional shuffler.
+{
+  const s = createSprint(['a', 'b', 'c', 'd', 'e']);
+  eq('sprint initial state', { left: sprintLeft(s), done: s.done, total: s.total }, {
+    left: 5,
+    done: 0,
+    total: 5,
+  });
+  const rev = createSprint(['a', 'b', 'c'], (arr) => arr.reverse());
+  eq('sprint shuffler applied', rev.remaining, ['c', 'b', 'a']);
+  eq('sprint gap constant', SPRINT_REINSERT_GAP, 3);
+}
+
+// 21. «Знаю» removes the front card; «Не знаю» returns it ~3 cards later.
+{
+  const s0 = createSprint(['a', 'b', 'c', 'd', 'e']);
+  const s1 = answerSprint(s0, false);
+  eq('unknown card reinserted at +3', s1.remaining, ['b', 'c', 'd', 'a', 'e']);
+  eq('unknown keeps done at 0', s1.done, 0);
+  const s2 = answerSprint(s1, true);
+  eq('known card removed', [s2.remaining.join(''), s2.done], ['cdae', 1]);
+  eq('sprint is pure (original untouched)', [s0.remaining.join(''), s0.done], ['abcde', 0]);
+}
+
+// 22. Short decks: «Не знаю» goes to the end; session completes when all known.
+{
+  const s0 = createSprint(['a', 'b']);
+  eq('2-card deck reinsert → end', answerSprint(s0, false).remaining, ['b', 'a']);
+  const s1 = createSprint(['x']);
+  eq('1-card deck unknown → stays', answerSprint(s1, false).remaining, ['x']);
+  let s = createSprint(['a', 'b', 'c']);
+  s = answerSprint(s, true);
+  s = answerSprint(s, false); // b → end
+  s = answerSprint(s, true); // c
+  eq('mid-session order', s.remaining, ['b']);
+  eq('not complete yet', sprintComplete(s), false);
+  s = answerSprint(s, true);
+  eq('sprint complete', [sprintComplete(s), s.done, s.total], [true, 3, 3]);
+  eq('empty sprint is not complete', sprintComplete(createSprint([])), false);
 }
 
 console.log(`\nSRS-MATH ${fail === 0 ? 'OK' : 'FAILED'} — ${pass} passed, ${fail} failed`);

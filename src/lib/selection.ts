@@ -9,7 +9,7 @@ export const SELECTION_KEY = 'b2words.selection.v1';
 export type SelectionSet = Set<string> | null;
 
 /** Stored as the most compact of: all / include-list / exclude-list. */
-type StoredSelection =
+export type StoredSelection =
   | { m: 'all' }
   | { m: 'inc'; w: string[] }
   | { m: 'exc'; w: string[] };

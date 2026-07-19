@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AnimationEvent as ReactAnimationEvent } from 'react';
-import { GraduationCap, Moon, Sun } from 'lucide-react';
+import { CheckCircle2, GraduationCap, Moon, Sun } from 'lucide-react';
 import { AppStateProvider, useAppState } from '@/state/app-state';
 import { BottomNav } from '@/components/BottomNav';
 import type { TabId } from '@/components/BottomNav';
@@ -9,6 +9,37 @@ import { WordListTab } from '@/sections/WordListTab';
 import { SelectionTab } from '@/sections/SelectionTab';
 import { QuizTab } from '@/sections/QuizTab';
 import { cn } from '@/lib/utils';
+
+/** sessionStorage flag left by a successful import right before location.reload(). */
+const IMPORT_TOAST_KEY = 'b2words.importToast';
+
+/** One-shot toast shown after a successful backup import (survives the reload). */
+function ImportToast() {
+  const [msg, setMsg] = useState<string | null>(() => {
+    try {
+      if (typeof sessionStorage === 'undefined') return null;
+      const v = sessionStorage.getItem(IMPORT_TOAST_KEY);
+      if (v) sessionStorage.removeItem(IMPORT_TOAST_KEY);
+      return v;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    if (!msg) return;
+    const t = window.setTimeout(() => setMsg(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [msg]);
+  if (!msg) return null;
+  return (
+    <div className="pointer-events-none fixed inset-x-0 bottom-20 z-50 flex justify-center px-4">
+      <p className="pop-in flex items-center gap-2 rounded-full border bg-card px-4 py-2.5 text-sm font-semibold shadow-xl">
+        <CheckCircle2 size={17} className="shrink-0 text-emerald-500" />
+        {msg}
+      </p>
+    </div>
+  );
+}
 
 function ThemeToggle() {
   const { settings, updateSettings } = useAppState();
@@ -71,6 +102,7 @@ export default function App() {
         </main>
 
         <BottomNav tab={tab} onChange={setTab} />
+        <ImportToast />
       </div>
     </AppStateProvider>
   );
