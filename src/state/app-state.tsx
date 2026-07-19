@@ -30,6 +30,8 @@ interface AppState {
   setWordKnown: (word: string, isKnown: boolean) => void;
   /** Card answer (Знаю/Не знаю): rates the Leitner box and logs daily activity. */
   rateWord: (word: string, knew: boolean) => void;
+  /** Log one studied answer toward the daily goal without touching SRS (free quiz). */
+  logAnswer: () => void;
   resetProgress: () => void;
   settings: Settings;
   updateSettings: (patch: Partial<Settings>) => void;
@@ -87,6 +89,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const logAnswer = useCallback(() => {
+    setActivity((prev) => {
+      const next = recordAnswer(prev, false);
+      saveActivity(next);
+      return next;
+    });
+  }, []);
+
   const resetProgress = useCallback(() => {
     clearSrs();
     clearActivity();
@@ -114,11 +124,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       streak: computeStreak(activity, settings.dailyGoal),
       setWordKnown,
       rateWord,
+      logAnswer,
       resetProgress,
       settings,
       updateSettings,
     };
-  }, [srs, activity, setWordKnown, rateWord, resetProgress, settings, updateSettings]);
+  }, [srs, activity, setWordKnown, rateWord, logAnswer, resetProgress, settings, updateSettings]);
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
 }

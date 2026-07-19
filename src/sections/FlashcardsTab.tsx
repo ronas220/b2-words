@@ -21,7 +21,7 @@ import { useAppState } from '@/state/app-state';
 import { useSpeech } from '@/hooks/useSpeech';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { celebrate, hapticTick } from '@/lib/celebrate';
-import { KNOWN_BOX, localDayKey } from '@/lib/srs';
+import { KNOWN_BOX, buildPlanQueue, introducedToday } from '@/lib/srs';
 import { SpeakerButton } from '@/components/SpeakerButton';
 import { Progress } from '@/components/ui/progress';
 import { cn, shuffleArray } from '@/lib/utils';
@@ -94,16 +94,7 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
 
   const plan = useMemo(() => {
     if (!isPlan) return { queue: [] as WordEntry[], dueCount: 0, newCount: 0 };
-    const now = nowTick;
-    const due = WORDS.filter((w) => {
-      const rec = srs[w.w];
-      return rec !== undefined && rec.due <= now;
-    });
-    due.sort((a, b) => srs[a.w].due - srs[b.w].due); // oldest due first
-    const introduced = activity[localDayKey()]?.newIntroduced ?? 0;
-    const budget = Math.max(0, newPerDay - introduced);
-    const fresh = budget > 0 ? WORDS.filter((w) => srs[w.w] === undefined).slice(0, budget) : [];
-    return { queue: [...due, ...fresh], dueCount: due.length, newCount: fresh.length };
+    return buildPlanQueue(WORDS, (w) => w.w, srs, newPerDay, introducedToday(activity), nowTick);
   }, [isPlan, srs, activity, newPerDay, nowTick]);
 
   const deck = useMemo(() => {

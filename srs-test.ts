@@ -2,7 +2,9 @@ import {
   BOX_INTERVALS,
   DAY,
   MINUTE,
+  buildPlanQueue,
   computeStreak,
+  introducedToday,
   knownFromSrs,
   migrateKnownToSrs,
   rate,
@@ -117,6 +119,42 @@ function eq(name: string, got: unknown, want: unknown): void {
     studied: 4,
     newIntroduced: 1,
   });
+}
+
+// 9. buildPlanQueue: due first (oldest due first), then NEW within the remaining budget.
+{
+  const items = ['w1', 'w2', 'w3', 'w4', 'w5'];
+  const keyOf = (w: string) => w;
+  const srs: SrsState = {
+    w1: { box: 2, due: NOW + DAY, lapses: 0 }, // not due yet
+    w2: { box: 2, due: NOW - 100, lapses: 0 }, // due
+    w4: { box: 3, due: NOW - 500, lapses: 0 }, // due, older
+    // w3, w5 — NEW (no record)
+  };
+  const q = buildPlanQueue(items, keyOf, srs, 10, 0, NOW);
+  eq('plan queue: due oldest-first, then new', q.queue, ['w4', 'w2', 'w3', 'w5']);
+  eq('plan queue counters', { due: q.dueCount, fresh: q.newCount }, { due: 2, fresh: 2 });
+}
+
+// 10. buildPlanQueue: daily new budget caps NEW words; exhausted budget → none.
+{
+  const items = ['n1', 'n2', 'n3', 'n4'];
+  const keyOf = (w: string) => w;
+  const capped = buildPlanQueue(items, keyOf, {}, 5, 3, NOW); // budget 2
+  eq('plan queue: budget caps new words', capped.queue, ['n1', 'n2']);
+  const drained = buildPlanQueue(items, keyOf, {}, 5, 5, NOW); // budget 0
+  eq('plan queue: exhausted budget yields no new', drained.queue, []);
+  eq('plan queue: exhausted counters', { due: drained.dueCount, fresh: drained.newCount }, {
+    due: 0,
+    fresh: 0,
+  });
+}
+
+// 11. introducedToday reads today's newIntroduced counter (local date).
+{
+  const act: ActivityMap = { '2025-06-15': { studied: 9, newIntroduced: 7 } };
+  eq('introducedToday reads counter', introducedToday(act, new Date(2025, 5, 15, 23, 59)), 7);
+  eq('introducedToday defaults to 0', introducedToday(act, new Date(2025, 5, 16, 0, 1)), 0);
 }
 
 console.log(`\nSRS-MATH ${fail === 0 ? 'OK' : 'FAILED'} — ${pass} passed, ${fail} failed`);

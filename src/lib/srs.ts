@@ -229,3 +229,44 @@ export function clearActivity(): void {
     // ignore
   }
 }
+
+/* ---------------- «На сегодня» plan queue (shared by Карточки and Тест) ---------------- */
+
+export interface PlanQueue<T> {
+  /** Due reviews (oldest due first) followed by new words within the budget. */
+  queue: T[];
+  dueCount: number;
+  newCount: number;
+}
+
+/** How many NEW words were already introduced today (shared daily budget). */
+export function introducedToday(activity: ActivityMap, today = new Date()): number {
+  return activity[localDayKey(today)]?.newIntroduced ?? 0;
+}
+
+/**
+ * Build today's SRS plan queue over `items`:
+ *  1. words with a record whose due <= now, oldest due first;
+ *  2. words with no record (NEW), capped by the remaining daily budget
+ *     max(0, newPerDay - introduced).
+ * Pure — the same builder feeds the flashcard deck and the quiz round, so both
+ * surfaces share one queue definition and one daily new-word budget.
+ */
+export function buildPlanQueue<T>(
+  items: T[],
+  keyOf: (item: T) => string,
+  srs: SrsState,
+  newPerDay: number,
+  introduced: number,
+  now = Date.now(),
+): PlanQueue<T> {
+  const due = items.filter((it) => {
+    const rec = srs[keyOf(it)];
+    return rec !== undefined && rec.due <= now;
+  });
+  due.sort((a, b) => srs[keyOf(a)].due - srs[keyOf(b)].due);
+  const budget = Math.max(0, newPerDay - introduced);
+  const fresh =
+    budget > 0 ? items.filter((it) => srs[keyOf(it)] === undefined).slice(0, budget) : [];
+  return { queue: [...due, ...fresh], dueCount: due.length, newCount: fresh.length };
+}

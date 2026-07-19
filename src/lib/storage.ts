@@ -13,6 +13,8 @@ export interface Settings {
   seenOnboarding: boolean;
   /** Flashcards deck mode: SRS daily plan queue or free browsing. */
   deckMode: 'plan' | 'free';
+  /** Quiz mode: SRS daily plan queue or random questions. */
+  quizMode: 'plan' | 'free';
   /** Daily budget of NEW words introduced in «План» mode. */
   newPerDay: number; // 5 | 10 | 15 | 25
   /** Daily goal of card answers (Знаю/Не знаю) for the streak. */
@@ -28,6 +30,7 @@ export const DEFAULT_SETTINGS: Settings = {
   deckPos: {},
   seenOnboarding: false,
   deckMode: 'plan',
+  quizMode: 'plan',
   newPerDay: 15,
   dailyGoal: 20,
 };
@@ -81,6 +84,7 @@ export function loadSettings(): Settings {
         dark: typeof p.dark === 'boolean' ? p.dark : base.dark,
         deckPos: p.deckPos && typeof p.deckPos === 'object' ? p.deckPos : {},
         deckMode: p.deckMode === 'free' ? 'free' : 'plan',
+        quizMode: p.quizMode === 'free' ? 'free' : 'plan',
         newPerDay: [5, 10, 15, 25].includes(Number(p.newPerDay))
           ? Number(p.newPerDay)
           : base.newPerDay,
