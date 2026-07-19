@@ -5,6 +5,7 @@ import {
   Check,
   Flame,
   Hand,
+  ListChecks,
   MoveLeft,
   MoveRight,
   PartyPopper,
@@ -22,8 +23,10 @@ import { useSpeech } from '@/hooks/useSpeech';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { celebrate, hapticTick } from '@/lib/celebrate';
 import { KNOWN_BOX, buildPlanQueue, introducedToday } from '@/lib/srs';
+import { filterSelected } from '@/lib/selection';
 import { SpeakerButton } from '@/components/SpeakerButton';
 import { Progress } from '@/components/ui/progress';
+import type { TabId } from '@/components/BottomNav';
 import { cn, shuffleArray } from '@/lib/utils';
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
@@ -33,9 +36,10 @@ const DAILY_GOAL_OPTIONS = [10, 20, 30, 50];
 
 interface FlashcardsTabProps {
   active: boolean;
+  onNavigate: (tab: TabId) => void;
 }
 
-export function FlashcardsTab({ active }: FlashcardsTabProps) {
+export function FlashcardsTab({ active, onNavigate }: FlashcardsTabProps) {
   const {
     known,
     knownCount,
@@ -43,6 +47,7 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
     activity,
     todayStudied,
     streak,
+    selection,
     rateWord,
     resetProgress,
     settings,
@@ -94,8 +99,12 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
 
   const plan = useMemo(() => {
     if (!isPlan) return { queue: [] as WordEntry[], dueCount: 0, newCount: 0 };
-    return buildPlanQueue(WORDS, (w) => w.w, srs, newPerDay, introducedToday(activity), nowTick);
-  }, [isPlan, srs, activity, newPerDay, nowTick]);
+    const pool = filterSelected(WORDS, (w) => w.w, selection);
+    return buildPlanQueue(pool, (w) => w.w, srs, newPerDay, introducedToday(activity), nowTick);
+  }, [isPlan, srs, activity, newPerDay, nowTick, selection]);
+
+  /** «Выбор» tab deselected everything — plan modes explain where to go. */
+  const selectionEmpty = selection !== null && selection.size === 0;
 
   const deck = useMemo(() => {
     if (isPlan) return plan.queue;
@@ -174,9 +183,9 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
   // fresh visit with nothing due yet).
   const prevLenRef = useRef(0);
   useEffect(() => {
-    if (isPlan && prevLenRef.current > 0 && deck.length === 0) celebrate();
+    if (isPlan && !selectionEmpty && prevLenRef.current > 0 && deck.length === 0) celebrate();
     prevLenRef.current = deck.length;
-  }, [isPlan, deck.length]);
+  }, [isPlan, selectionEmpty, deck.length]);
 
   /* ---------------- swipe gestures ---------------- */
   const [dragX, setDragX] = useState(0);
@@ -583,6 +592,24 @@ export function FlashcardsTab({ active }: FlashcardsTabProps) {
             </button>
           </div>
         </>
+      ) : isPlan && selectionEmpty ? (
+        /* «Выбор» has no words — point there */
+        <div className="card-shadow flex min-h-[220px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">
+          <span className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400">
+            <ListChecks size={30} />
+          </span>
+          <p className="font-display text-lg font-bold">Нет выбранных слов</p>
+          <p className="text-sm text-muted-foreground">
+            Перейдите во вкладку «Выбор» и отметьте слова для плана.
+          </p>
+          <button
+            type="button"
+            onClick={() => onNavigate('select')}
+            className="mt-1 flex h-11 items-center rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-all active:scale-95"
+          >
+            Открыть выбор
+          </button>
+        </div>
       ) : isPlan ? (
         /* «План» finished — celebration state */
         <div className="card-shadow flex min-h-[220px] flex-1 flex-col items-center justify-center gap-3 rounded-3xl border bg-card p-6 text-center">

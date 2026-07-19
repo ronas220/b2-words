@@ -11,6 +11,15 @@ import {
   recordAnswer,
 } from './src/lib/srs';
 import type { ActivityMap, SrsState } from './src/lib/srs';
+import {
+  applySelection,
+  filterSelected,
+  isSelected,
+  parseSelection,
+  selectedCount,
+  serializeSelection,
+} from './src/lib/selection';
+import type { SelectionSet } from './src/lib/selection';
 
 const NOW = 1_750_000_000_000; // fixed epoch ms for deterministic checks
 let pass = 0;
@@ -155,6 +164,66 @@ function eq(name: string, got: unknown, want: unknown): void {
   const act: ActivityMap = { '2025-06-15': { studied: 9, newIntroduced: 7 } };
   eq('introducedToday reads counter', introducedToday(act, new Date(2025, 5, 15, 23, 59)), 7);
   eq('introducedToday defaults to 0', introducedToday(act, new Date(2025, 5, 16, 0, 1)), 0);
+}
+
+/* ---------------- selection («Выбор» tab) ---------------- */
+
+const ALL = ['a', 'b', 'c', 'd', 'e'];
+const VALID = new Set(ALL);
+
+// 12. Default = all selected (null); missing/garbage records also mean all.
+{
+  eq('selection default is all (null)', parseSelection(undefined, VALID, ALL), null);
+  eq('selection garbage → all', parseSelection('{bad', VALID, ALL), null);
+  eq('selection stored all → null', parseSelection({ m: 'all' }, VALID, ALL), null);
+  eq('selectedCount of null = total', selectedCount(null, ALL.length), 5);
+  eq('isSelected with null = true', isSelected(null, 'a'), true);
+}
+
+// 13. Deselect from «all» materializes the complement; re-select collapses to null.
+{
+  const after = applySelection(null, ['b'], false, ALL);
+  eq('deselect one from all', after === null ? null : [...after], ['a', 'c', 'd', 'e']);
+  const back = applySelection(after, ['b'], true, ALL);
+  eq('re-select last missing → all (null)', back, null);
+  const cleared = applySelection(null, ALL, false, ALL);
+  eq('deselect all → empty set', cleared === null ? null : cleared.size, 0);
+  const one = applySelection(cleared, ['c'], true, ALL);
+  eq('select one into empty', one === null ? null : [...one], ['c']);
+}
+
+// 14. Serialization picks the smallest representation; round-trips preserve the set.
+{
+  eq('serialize null → all', serializeSelection(null, ALL), { m: 'all' });
+  const small: SelectionSet = new Set(['a']);
+  eq('serialize tiny set → inc', serializeSelection(small, ALL), { m: 'inc', w: ['a'] });
+  const big: SelectionSet = new Set(['a', 'b', 'c', 'd']);
+  eq('serialize big set → exc', serializeSelection(big, ALL), { m: 'exc', w: ['e'] });
+  const rt1 = parseSelection(serializeSelection(small, ALL), VALID, ALL);
+  eq('round-trip inc', rt1 === null ? null : [...rt1], ['a']);
+  const rt2 = parseSelection(serializeSelection(big, ALL), VALID, ALL);
+  eq('round-trip exc', rt2 === null ? null : [...rt2], ['a', 'b', 'c', 'd']);
+  const withUnknown = parseSelection({ m: 'inc', w: ['a', 'zzz', 42] }, VALID, ALL);
+  eq('load drops unknown words', withUnknown === null ? null : [...withUnknown], ['a']);
+}
+
+// 15. filterSelected + plan queue: deselected due words leave the queue.
+{
+  const items = ALL;
+  eq('filterSelected null passes all', filterSelected(items, (w) => w, null), ALL);
+  const sel: SelectionSet = new Set(['a', 'c']);
+  eq('filterSelected set filters', filterSelected(items, (w) => w, sel), ['a', 'c']);
+  const srs: SrsState = {
+    b: { box: 2, due: NOW - 100, lapses: 0 }, // due but NOT selected
+    a: { box: 2, due: NOW - 200, lapses: 0 }, // due and selected
+  };
+  const pool = filterSelected(items, (w) => w, sel);
+  const q = buildPlanQueue(pool, (w) => w, srs, 10, 0, NOW);
+  eq('plan queue respects selection (due b excluded)', q.queue, ['a', 'c']);
+  eq('plan queue counters with selection', { due: q.dueCount, fresh: q.newCount }, {
+    due: 1,
+    fresh: 1,
+  });
 }
 
 console.log(`\nSRS-MATH ${fail === 0 ? 'OK' : 'FAILED'} — ${pass} passed, ${fail} failed`);

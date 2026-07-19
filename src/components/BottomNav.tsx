@@ -1,12 +1,13 @@
-import { BookOpen, ClipboardList, Layers } from 'lucide-react';
+import { BookOpen, ClipboardList, Layers, ListChecks } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type TabId = 'cards' | 'list' | 'quiz';
+export type TabId = 'cards' | 'list' | 'select' | 'quiz';
 
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'cards', label: 'Карточки', icon: Layers },
   { id: 'list', label: 'Список', icon: BookOpen },
+  { id: 'select', label: 'Выбор', icon: ListChecks },
   { id: 'quiz', label: 'Тест', icon: ClipboardList },
 ];
 

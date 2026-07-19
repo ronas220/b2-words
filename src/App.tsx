@@ -6,6 +6,7 @@ import { BottomNav } from '@/components/BottomNav';
 import type { TabId } from '@/components/BottomNav';
 import { FlashcardsTab } from '@/sections/FlashcardsTab';
 import { WordListTab } from '@/sections/WordListTab';
+import { SelectionTab } from '@/sections/SelectionTab';
 import { QuizTab } from '@/sections/QuizTab';
 import { cn } from '@/lib/utils';
 
@@ -56,13 +57,16 @@ export default function App() {
         >
           {/* All tabs stay mounted so deck position / quiz round survive tab switches */}
           <div className={cn(tab !== 'cards' && 'hidden', tab === 'cards' && 'tab-enter')} onAnimationEnd={clearEnter}>
-            <FlashcardsTab active={tab === 'cards'} />
+            <FlashcardsTab active={tab === 'cards'} onNavigate={setTab} />
           </div>
           <div className={cn(tab !== 'list' && 'hidden', tab === 'list' && 'tab-enter')} onAnimationEnd={clearEnter}>
             <WordListTab />
           </div>
+          <div className={cn(tab !== 'select' && 'hidden', tab === 'select' && 'tab-enter')} onAnimationEnd={clearEnter}>
+            <SelectionTab />
+          </div>
           <div className={cn(tab !== 'quiz' && 'hidden', tab === 'quiz' && 'tab-enter')} onAnimationEnd={clearEnter}>
-            <QuizTab />
+            <QuizTab onNavigate={setTab} />
           </div>
         </main>
 

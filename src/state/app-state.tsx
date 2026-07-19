@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { WORDS } from '@/data/words';
 import { loadSettings, saveSettings } from '@/lib/storage';
 import type { Settings } from '@/lib/storage';
 import {
@@ -17,6 +18,11 @@ import {
   saveSrs,
 } from '@/lib/srs';
 import type { ActivityMap, SrsState } from '@/lib/srs';
+import { applySelection, loadSelection, saveSelection } from '@/lib/selection';
+import type { SelectionSet } from '@/lib/selection';
+
+const ALL_WORDS = WORDS.map((w) => w.w);
+const VALID_WORDS = new Set(ALL_WORDS);
 
 interface AppState {
   /** Derived from SRS: words with box >= 3 count as «выучено». */
@@ -26,12 +32,19 @@ interface AppState {
   activity: ActivityMap;
   todayStudied: number;
   streak: number;
+  /** Words chosen for the SRS plan; null = all 1335 (the default). */
+  selection: SelectionSet;
+  selectedCount: number;
   /** Manual «выучено» toggle (List tab): check → box 5, uncheck → remove record. */
   setWordKnown: (word: string, isKnown: boolean) => void;
   /** Card answer (Знаю/Не знаю): rates the Leitner box and logs daily activity. */
   rateWord: (word: string, knew: boolean) => void;
   /** Log one studied answer toward the daily goal without touching SRS (free quiz). */
   logAnswer: () => void;
+  /** Add/remove words from the plan selection (single or bulk). */
+  setWordsSelected: (words: string[], on: boolean) => void;
+  selectAll: () => void;
+  clearSelection: () => void;
   resetProgress: () => void;
   settings: Settings;
   updateSettings: (patch: Partial<Settings>) => void;
@@ -43,6 +56,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [srs, setSrs] = useState<SrsState>(() => loadSrs());
   const [activity, setActivity] = useState<ActivityMap>(() => loadActivity());
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
+  const [selection, setSelection] = useState<SelectionSet>(() =>
+    loadSelection(VALID_WORDS, ALL_WORDS),
+  );
   const srsRef = useRef(srs);
   srsRef.current = srs;
 
@@ -97,6 +113,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const setWordsSelected = useCallback((words: string[], on: boolean) => {
+    setSelection((prev) => {
+      const next = applySelection(prev, words, on, ALL_WORDS);
+      saveSelection(next, ALL_WORDS);
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback(() => {
+    saveSelection(null, ALL_WORDS);
+    setSelection(null);
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    const empty = new Set<string>();
+    saveSelection(empty, ALL_WORDS);
+    setSelection(empty);
+  }, []);
+
   const resetProgress = useCallback(() => {
     clearSrs();
     clearActivity();
@@ -122,14 +157,32 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       activity,
       todayStudied: activity[today]?.studied ?? 0,
       streak: computeStreak(activity, settings.dailyGoal),
+      selection,
+      selectedCount: selection === null ? ALL_WORDS.length : selection.size,
       setWordKnown,
       rateWord,
       logAnswer,
+      setWordsSelected,
+      selectAll,
+      clearSelection,
       resetProgress,
       settings,
       updateSettings,
     };
-  }, [srs, activity, setWordKnown, rateWord, logAnswer, resetProgress, settings, updateSettings]);
+  }, [
+    srs,
+    activity,
+    selection,
+    setWordKnown,
+    rateWord,
+    logAnswer,
+    setWordsSelected,
+    selectAll,
+    clearSelection,
+    resetProgress,
+    settings,
+    updateSettings,
+  ]);
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
 }
